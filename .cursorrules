@@ -1,0 +1,294 @@
+# LangChain4j + Spring Boot 개발 가이드
+
+## 개요
+LangChain4j는 LLM을 Java 애플리케이션에 통합하는 것을 단순화하는 라이브러리입니다.
+참고 문서: https://docs.langchain4j.dev/intro
+
+## 아키텍처 레벨
+
+### 1. Low Level (저수준)
+- ChatModel, UserMessage, AiMessage, EmbeddingStore, Embedding 등 기본 구성 요소 직접 사용
+- 최대한의 자유도와 제어권 제공
+- 더 많은 글루 코드 필요
+
+### 2. High Level (고수준) - 권장
+- AI Services를 통한 선언적 API 사용
+- @AiService 어노테이션으로 간단한 인터페이스 정의
+- 복잡성과 보일러플레이트 코드 숨김
+
+## 핵심 컴포넌트 및 패턴
+
+### AI Services 구현
+```java
+@AiService
+public interface Assistant {
+    @SystemMessage("You are a helpful assistant")
+    String chat(String userMessage);
+    
+    // 스트리밍 응답
+    Flux<String> chatStream(String userMessage);
+}
+```
+
+### 컨트롤러 구현
+```java
+@RestController
+@RequestMapping("/api/chat")
+public class ChatController {
+    
+    private final Assistant assistant;
+    
+    public ChatController(Assistant assistant) {
+        this.assistant = assistant;
+    }
+    
+    @PostMapping
+    public String chat(@RequestBody String message) {
+        return assistant.chat(message);
+    }
+    
+    @PostMapping("/stream")
+    public Flux<String> chatStream(@RequestBody String message) {
+        return assistant.chatStream(message);
+    }
+}
+```
+
+### Tools (Function Calling) 구현
+```java
+@Component
+public class BusinessTools {
+    
+    @Tool("사용자 정보를 조회합니다")
+    public UserInfo getUserInfo(String userId) {
+        // 비즈니스 로직 구현
+        return userService.findById(userId);
+    }
+    
+    @Tool("주문을 생성합니다")
+    public Order createOrder(String userId, String productId, int quantity) {
+        // 주문 생성 로직
+        return orderService.createOrder(userId, productId, quantity);
+    }
+}
+```
+
+### RAG (Retrieval-Augmented Generation) 구현
+```java
+@Configuration
+public class RagConfiguration {
+    
+    @Bean
+    public EmbeddingStore<TextSegment> embeddingStore() {
+        return new InMemoryEmbeddingStore<>();
+    }
+    
+    @Bean
+    public ContentRetriever contentRetriever(EmbeddingStore<TextSegment> embeddingStore,
+                                           EmbeddingModel embeddingModel) {
+        return EmbeddingStoreContentRetriever.builder()
+                .embeddingStore(embeddingStore)
+                .embeddingModel(embeddingModel)
+                .maxResults(3)
+                .minScore(0.6)
+                .build();
+    }
+}
+```
+
+## Spring Boot 설정 패턴
+
+### application.properties 기본 설정
+```properties
+# OpenAI 설정
+langchain4j.open-ai.chat-model.api-key=${OPENAI_API_KEY}
+langchain4j.open-ai.chat-model.model-name=gpt-4o
+langchain4j.open-ai.chat-model.log-requests=true
+langchain4j.open-ai.chat-model.log-responses=true
+
+# 임베딩 모델 설정
+langchain4j.open-ai.embedding-model.api-key=${OPENAI_API_KEY}
+langchain4j.open-ai.embedding-model.model-name=text-embedding-3-small
+
+# 스트리밍 설정
+langchain4j.open-ai.streaming-chat-model.api-key=${OPENAI_API_KEY}
+langchain4j.open-ai.streaming-chat-model.model-name=gpt-4o
+```
+
+### 멀티 모델 설정 (명시적 와이어링)
+```java
+@AiService(wiringMode = EXPLICIT, chatModel = "openAiChatModel")
+interface OpenAiAssistant {
+    String chat(String message);
+}
+
+@AiService(wiringMode = EXPLICIT, chatModel = "ollamaChatModel")
+interface OllamaAssistant {
+    String chat(String message);
+}
+```
+
+## 의존성 관리
+
+### 필수 의존성
+```xml
+<!-- 핵심 스타터 -->
+<dependency>
+    <groupId>dev.langchain4j</groupId>
+    <artifactId>langchain4j-spring-boot-starter</artifactId>
+    <version>1.1.0-beta7</version>
+</dependency>
+
+<!-- LLM 제공자 (OpenAI 예시) -->
+<dependency>
+    <groupId>dev.langchain4j</groupId>
+    <artifactId>langchain4j-open-ai-spring-boot-starter</artifactId>
+    <version>1.1.0-beta7</version>
+</dependency>
+
+<!-- 스트리밍 지원 -->
+<dependency>
+    <groupId>dev.langchain4j</groupId>
+    <artifactId>langchain4j-reactor</artifactId>
+    <version>1.1.0-beta7</version>
+</dependency>
+```
+
+### 추가 통합 모듈 (필요시)
+- `langchain4j-ollama-spring-boot-starter` - Ollama 로컬 모델
+- `langchain4j-anthropic-spring-boot-starter` - Claude
+- `langchain4j-azure-open-ai-spring-boot-starter` - Azure OpenAI
+- `langchain4j-pinecone-spring-boot-starter` - Pinecone 벡터 DB
+- `langchain4j-chroma-spring-boot-starter` - ChromaDB
+
+## 개발 Best Practices
+
+### 1. 보안
+- API 키를 환경변수로 관리: `${OPENAI_API_KEY}`
+- .env 파일이나 시스템 환경변수 사용
+- Git에 API 키 커밋 금지
+
+### 2. 에러 처리
+```java
+@ControllerAdvice
+public class ChatExceptionHandler {
+    
+    @ExceptionHandler(RuntimeException.class)
+    public ResponseEntity<String> handleChatError(RuntimeException e) {
+        return ResponseEntity.status(500)
+                .body("채팅 처리 중 오류가 발생했습니다: " + e.getMessage());
+    }
+}
+```
+
+### 3. 로깅 및 모니터링
+```java
+@Configuration
+public class ObservabilityConfig {
+    
+    @Bean
+    public ChatModelListener chatModelListener() {
+        return new ChatModelListener() {
+            private static final Logger log = LoggerFactory.getLogger(ChatModelListener.class);
+            
+            @Override
+            public void onRequest(ChatModelRequestContext ctx) {
+                log.info("Chat request: {}", ctx.chatRequest());
+            }
+            
+            @Override
+            public void onResponse(ChatModelResponseContext ctx) {
+                log.info("Chat response: {}", ctx.chatResponse());
+            }
+        };
+    }
+}
+```
+
+### 4. 테스팅
+```java
+@SpringBootTest
+class ChatServiceTest {
+    
+    @MockBean
+    private ChatModel chatModel;
+    
+    @Autowired
+    private Assistant assistant;
+    
+    @Test
+    void shouldReturnResponse() {
+        when(chatModel.chat("Hello")).thenReturn("Hi there!");
+        
+        String response = assistant.chat("Hello");
+        
+        assertThat(response).isEqualTo("Hi there!");
+    }
+}
+```
+
+## 일반적인 사용 사례
+
+### 1. 고객 지원 챗봇
+- 고객 질문 답변
+- 주문 조회/변경/취소
+- 예의 바른 응답 유지
+
+### 2. 문서 처리 및 분석
+- 비구조화된 데이터에서 구조화된 정보 추출
+- 고객 리뷰 분석
+- 이력서 정보 추출
+
+### 3. 콘텐츠 생성
+- 개인화된 이메일 생성
+- 블로그 포스트 작성
+- 번역 및 요약
+
+### 4. RAG 시스템
+- 문서 임베딩 및 저장
+- 시맨틱 검색
+- 컨텍스트 기반 답변 생성
+
+## 문제 해결
+
+### 일반적인 이슈
+1. **API 키 오류**: 환경변수 설정 확인
+2. **모델 응답 없음**: 로그 활성화하여 요청/응답 확인
+3. **스트리밍 문제**: langchain4j-reactor 의존성 확인
+4. **멀티 모델 충돌**: 명시적 와이어링 사용
+
+### 디버깅 팁
+- `log-requests=true`, `log-responses=true` 활성화
+- ChatModelListener로 상세 로깅
+- 테스트 환경에서 작은 모델부터 시작
+
+## 성능 최적화
+
+### 1. 비동기 처리
+```java
+@Async
+public CompletableFuture<String> processAsync(String message) {
+    return CompletableFuture.completedFuture(assistant.chat(message));
+}
+```
+
+### 2. 캐싱
+```java
+@Cacheable("chat-responses")
+public String getCachedResponse(String message) {
+    return assistant.chat(message);
+}
+```
+
+### 3. 스트리밍 활용
+```java
+public Flux<String> streamResponse(String message) {
+    return assistant.chatStream(message)
+            .delayElements(Duration.ofMillis(50)); // UI 효과
+}
+```
+
+---
+
+이 가이드를 따라 LangChain4j + Spring Boot 애플리케이션을 효율적으로 개발하세요.
+지속적으로 공식 문서 https://docs.langchain4j.dev/intro 를 참조하여 최신 기능을 활용하세요. 
