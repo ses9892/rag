@@ -64,24 +64,40 @@
 
 ## 핵심 컴포넌트
 
-### 1. AI Service Interface
+### 1. AI Service Interface (메모리 지원)
 **파일**: `src/main/java/com/langchain/rag/service/ChatAssistant.java`
 ```java
 @AiService
 public interface ChatAssistant {
-    @SystemMessage("당신은 친절하고 도움이 되는 한국어 AI 어시스턴트입니다. 항상 정중하고 유용한 답변을 제공해주세요.")
-    Flux<String> chatStream(String userMessage);
+    @SystemMessage("당신은 친절하고 도움이 되는 한국어 AI 어시스턴트입니다. 이전 대화 내용을 기억하고 맥락에 맞게 대답해주세요.")
+    Flux<String> chatStream(@MemoryId String memoryId, String userMessage);
 }
 ```
 
-### 2. WebSocket 핸들러 (스트리밍 전용)
+### 2. 메모리 설정 및 관리
+**파일**: `src/main/java/com/langchain/rag/config/ChatMemoryConfig.java`
+- **MessageWindowChatMemory**: 최근 10개 메시지 보관
+- **세션별 메모리 격리**: ConcurrentHashMap으로 관리
+- **메모리 생명주기 관리**: 생성, 조회, 삭제 기능
+
+### 3. WebSocket 핸들러 (스트리밍 + 메모리)
 **파일**: `src/main/java/com/langchain/rag/websocket/ChatWebSocketHandler.java`
 - **모든 메시지를 스트리밍으로 처리**
 - **동기 방식 완전 제거됨**
+- **논리적 세션 ID 기반 메모리 사용**
+- **프론트엔드에서 전송한 sessionId를 memoryId로 활용**
 - **세션 관리 및 브로드캐스트 기능**
 - **실시간 토큰 단위 스트리밍**
 
-### 3. WebSocket 설정
+### 4. 메모리 관리 REST API
+**파일**: `src/main/java/com/langchain/rag/controller/MemoryController.java`
+- **GET `/api/memory/{sessionId}`**: 특정 세션의 대화 히스토리 조회
+- **DELETE `/api/memory/{sessionId}`**: 특정 세션 메모리 초기화
+- **DELETE `/api/memory/all`**: 모든 메모리 초기화
+- **GET `/api/memory/status`**: 전체 메모리 상태 조회
+- **DELETE `/api/memory/{sessionId}/remove`**: 세션 완전 삭제
+
+### 5. WebSocket 설정
 **파일**: `src/main/java/com/langchain/rag/config/WebSocketConfig.java`
 ```java
 @Configuration
@@ -95,12 +111,12 @@ public class WebSocketConfig implements WebSocketConfigurer {
 }
 ```
 
-### 4. REST API (백업용)
+### 6. REST API (백업용)
 **파일**: `src/main/java/com/langchain/rag/controller/ChatController.java`
 - **HTTP SSE 기반 스트리밍**
 - **테스트 및 디버깅용**
 
-### 5. 전역 예외 처리
+### 7. 전역 예외 처리
 **파일**: `src/main/java/com/langchain/rag/exception/ChatExceptionHandler.java`
 - **@ControllerAdvice 기반**
 - **통일된 에러 응답 형식**
@@ -143,14 +159,18 @@ langchain4j.open-ai.streaming-chat-model.log-responses=true
 - **WebSocket 자동 연결**: 페이지 로드 시 즉시 연결
 - **실시간 연결 상태 표시**: 연결됨/연결 중/연결 끊김
 - **자동 재연결 기능**: 연결 끊김 시 자동 복구
+- **메모리 관리 UI**: 메모리 조회, 초기화 버튼 제공
+- **실시간 메모리 상태 표시**: 현재 저장된 메시지 수 표시
 - **스트리밍 애니메이션**: 답변 생성 중 깜빡이는 커서
 - **반응형 디자인**: 모바일/데스크톱 대응
 
 **UI 흐름**:
-1. 페이지 로드 → WebSocket 자동 연결
-2. 사용자 메시지 입력 → 즉시 스트리밍 시작
-3. AI 응답을 토큰 단위로 실시간 출력
-4. 연결 끊김 시 자동 재연결 시도
+1. 페이지 로드 → WebSocket 자동 연결 + 논리적 세션 ID 생성
+2. 사용자 메시지 입력 → 세션 ID와 함께 스트리밍 시작
+3. AI 응답을 토큰 단위로 실시간 출력 (이전 대화 기억)
+4. 대화 완료 후 메모리 상태 자동 업데이트
+5. 메모리 관리 버튼으로 히스토리 조회/삭제 가능
+6. 연결 끊김 시 자동 재연결 시도
 
 ## 개발 과정에서 해결한 주요 문제들
 
@@ -176,14 +196,16 @@ rag/
 ├── src/main/java/com/langchain/rag/
 │   ├── RagApplication.java                    # 메인 애플리케이션
 │   ├── service/
-│   │   └── ChatAssistant.java                # AI 서비스 인터페이스
+│   │   └── ChatAssistant.java                # AI 서비스 인터페이스 (@MemoryId 지원)
 │   ├── controller/
 │   │   ├── ChatController.java               # REST API (백업용)
+│   │   ├── MemoryController.java             # 메모리 관리 API
 │   │   └── WebSocketStatusController.java    # WebSocket 상태 관리
 │   ├── websocket/
-│   │   └── ChatWebSocketHandler.java         # WebSocket 핸들러
+│   │   └── ChatWebSocketHandler.java         # WebSocket 핸들러 (메모리 지원)
 │   ├── config/
-│   │   └── WebSocketConfig.java              # WebSocket 설정
+│   │   ├── WebSocketConfig.java              # WebSocket 설정
+│   │   └── ChatMemoryConfig.java             # 메모리 설정 및 관리
 │   └── exception/
 │       └── ChatExceptionHandler.java         # 전역 예외 처리
 ├── src/main/resources/
@@ -202,13 +224,18 @@ rag/
 1. **LangChain4j + OpenAI GPT-4o 통합**
 2. **WebSocket 기반 실시간 스트리밍**
 3. **스트리밍 전용 아키텍처**
-4. **자동 연결/재연결 기능**
-5. **반응형 웹 UI**
-6. **전역 예외 처리**
-7. **세션 관리 및 브로드캐스트**
+4. **MessageWindowChatMemory 기반 대화 메모리**
+5. **세션별 메모리 관리 시스템**
+6. **메모리 관리 REST API**
+7. **자동 연결/재연결 기능**
+8. **반응형 웹 UI (메모리 관리 포함)**
+9. **전역 예외 처리**
+10. **세션 관리 및 브로드캐스트**
 
 ### 🎯 핵심 특징
 - **완전한 스트리밍 전용 시스템**: 동기 방식은 완전히 제거됨, 추가 금지
+- **대화 메모리 기능**: MessageWindowChatMemory로 최근 10개 메시지 기억
+- **세션별 컨텍스트 관리**: 각 사용자별 독립적인 대화 히스토리
 - **실시간 토큰 단위 응답**: 사용자 경험 최적화
 - **자동 연결 관리**: 끊김 시 자동 복구
 - **한국어 최적화**: 시스템 메시지 및 UI 모두 한국어
@@ -243,5 +270,5 @@ rag/
 
 ---
 
-**마지막 업데이트**: 2024년 12월 (프로젝트 완료 시점)
-**상태**: 스트리밍 전용 WebSocket 챗봇 완성 
+**마지막 업데이트**: 2025년 7월 7일 (메모리 기능 추가 완료)
+**상태**: MessageWindowChatMemory 기반 스트리밍 WebSocket 챗봇 완성 

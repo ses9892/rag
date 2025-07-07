@@ -50,6 +50,8 @@
             justify-content: space-between;
             align-items: center;
             font-size: 14px;
+            flex-wrap: wrap;
+            gap: 10px;
         }
 
         .status-item {
@@ -185,6 +187,40 @@
             color: #374151;
             margin-bottom: 10px;
         }
+
+        .memory-controls {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .memory-btn {
+            padding: 4px 8px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            background: white;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .memory-btn:hover {
+            background: #f3f4f6;
+        }
+
+        .memory-btn.danger {
+            border-color: #dc2626;
+            color: #dc2626;
+        }
+
+        .memory-btn.danger:hover {
+            background: #fef2f2;
+        }
+
+        .memory-info {
+            font-size: 12px;
+            color: #6b7280;
+        }
     </style>
 </head>
 <body>
@@ -201,6 +237,13 @@
             </div>
             <div class="status-item">
                 <span>⚡ 스트리밍 모드</span>
+            </div>
+            <div class="status-item">
+                <span class="memory-info" id="memoryInfo">메모리: 0개 메시지</span>
+            </div>
+            <div class="memory-controls">
+                <button class="memory-btn" onclick="showMemory()">메모리 보기</button>
+                <button class="memory-btn danger" onclick="clearMemory()">메모리 초기화</button>
             </div>
         </div>
 
@@ -226,12 +269,14 @@
         let isConnected = false;
         let streamingDiv = null;
         let streamingContent = '';
+        let currentSessionId = null;
 
         const chatMessages = document.getElementById('chatMessages');
         const chatInput = document.getElementById('chatInput');
         const sendBtn = document.getElementById('sendBtn');
         const statusDot = document.getElementById('statusDot');
         const connectionStatus = document.getElementById('connectionStatus');
+        const memoryInfo = document.getElementById('memoryInfo');
 
         // 페이지 로드 시 자동으로 WebSocket 연결
         window.addEventListener('load', function() {
@@ -245,9 +290,11 @@
             websocket.onopen = function(event) {
                 console.log('WebSocket 연결 성공');
                 isConnected = true;
+                currentSessionId = generateSessionId(); // 세션 ID 생성
                 updateConnectionStatus('연결됨', true);
                 enableChatInput();
                 clearWelcomeMessage();
+                updateMemoryInfo(); // 메모리 정보 업데이트
             };
 
             websocket.onmessage = function(event) {
@@ -290,10 +337,11 @@
             addMessage(message, true);
             chatInput.value = '';
             
-            // 무조건 스트리밍으로 전송
+            // 무조건 스트리밍으로 전송 (세션 ID 포함)
             const messageData = {
                 message: message,
-                type: 'stream'
+                type: 'stream',
+                sessionId: currentSessionId
             };
 
             websocket.send(JSON.stringify(messageData));
@@ -325,6 +373,7 @@
                         streamingDiv.className = 'message ai-message';
                         streamingDiv = null;
                         streamingContent = '';
+                        updateMemoryInfo(); // 대화 완료 후 메모리 정보 업데이트
                     }
                     break;
 
@@ -384,6 +433,91 @@
             const welcomeMsg = chatMessages.querySelector('.welcome-message');
             if (welcomeMsg) {
                 welcomeMsg.remove();
+            }
+        }
+
+        // 세션 ID 생성 (WebSocket 연결과는 별개의 논리적 세션)
+        function generateSessionId() {
+            return 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+        }
+
+        // 메모리 정보 업데이트
+        async function updateMemoryInfo() {
+            if (!currentSessionId) return;
+            
+            try {
+                const response = await fetch(`/api/memory/${currentSessionId}`);
+                const data = await response.json();
+                
+                if (data.exists) {
+                    memoryInfo.textContent = `메모리: ${data.messageCount}개 메시지`;
+                } else {
+                    memoryInfo.textContent = '메모리: 0개 메시지';
+                }
+            } catch (error) {
+                console.error('메모리 정보 업데이트 실패:', error);
+                memoryInfo.textContent = '메모리: 정보 없음';
+            }
+        }
+
+        // 메모리 보기
+        async function showMemory() {
+            if (!currentSessionId) {
+                alert('세션이 연결되지 않았습니다.');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/memory/${currentSessionId}`);
+                const data = await response.json();
+                
+                if (data.exists && data.messages.length > 0) {
+                    let memoryContent = `세션 ID: ${data.sessionId}\\n`;
+                    memoryContent += `메시지 수: ${data.messageCount}\\n\\n`;
+                    memoryContent += '대화 기록:\\n';
+                    memoryContent += '=' .repeat(50) + '\\n';
+                    
+                    data.messages.forEach((msg, index) => {
+                        const type = msg.type === 'USER_MESSAGE' ? '👤 사용자' : '🤖 AI';
+                        memoryContent += `${index + 1}. ${type}: ${msg.text}\\n\\n`;
+                    });
+                    
+                    alert(memoryContent);
+                } else {
+                    alert('저장된 대화 기록이 없습니다.');
+                }
+            } catch (error) {
+                console.error('메모리 조회 실패:', error);
+                alert('메모리 조회 중 오류가 발생했습니다.');
+            }
+        }
+
+        // 메모리 초기화
+        async function clearMemory() {
+            if (!currentSessionId) {
+                alert('세션이 연결되지 않았습니다.');
+                return;
+            }
+            
+            if (!confirm('현재 세션의 대화 기록을 모두 삭제하시겠습니까?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/memory/${currentSessionId}`, {
+                    method: 'DELETE'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    addSystemMessage('✅ 대화 기록이 초기화되었습니다.');
+                    updateMemoryInfo();
+                } else {
+                    alert('메모리 초기화에 실패했습니다.');
+                }
+            } catch (error) {
+                console.error('메모리 초기화 실패:', error);
+                alert('메모리 초기화 중 오류가 발생했습니다.');
             }
         }
     </script>

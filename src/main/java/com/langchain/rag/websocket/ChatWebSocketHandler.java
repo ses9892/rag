@@ -48,9 +48,11 @@ public class ChatWebSocketHandler implements WebSocketHandler {
         try {
             JsonNode jsonNode = objectMapper.readTree(payload);
             String userMessage = jsonNode.get("message").asText();
+            String memoryId = jsonNode.has("sessionId") ? 
+                jsonNode.get("sessionId").asText() : session.getId();
             
-            // 모든 메시지를 스트리밍으로 처리
-            handleChatMessage(session, userMessage);
+            // 모든 메시지를 스트리밍으로 처리 (논리적 세션 ID 사용)
+            handleChatMessage(session, userMessage, memoryId);
             
         } catch (Exception e) {
             log.error("메시지 처리 중 오류 발생", e);
@@ -60,13 +62,13 @@ public class ChatWebSocketHandler implements WebSocketHandler {
 
  
 
-    private void handleChatMessage(WebSocketSession session, String userMessage) {
+    private void handleChatMessage(WebSocketSession session, String userMessage, String memoryId) {
         try {
             // 스트리밍 시작 알림
             sendMessage(session, new ChatMessage("system", "스트리밍을 시작합니다...", "stream_start"));
             
-            // 스트리밍 채팅
-            Flux<String> streamResponse = chatAssistant.chatStream(userMessage);
+            // 프론트엔드에서 전송한 논리적 세션 ID를 메모리 ID로 사용
+            Flux<String> streamResponse = chatAssistant.chatStream(memoryId, userMessage);
             
             streamResponse
                 .subscribeOn(Schedulers.boundedElastic())
